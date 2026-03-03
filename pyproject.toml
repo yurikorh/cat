@@ -1,0 +1,36 @@
+[project]
+name = "cat-bot"
+version = "0.1.0"
+description = "QQ群聊猫猫机器人 - 具备长期记忆和好感度系统的人设机器人"
+requires-python = ">=3.10"
+dependencies = [
+    "nonebot2[fastapi]>=2.4.0",
+    "nonebot-adapter-onebot>=2.4.0",
+    "nonebot2[websockets]>=2.4.0",
+    "mem0ai>=0.1.0",
+    "qdrant-client>=1.9.0",
+    "openai>=1.30.0",
+    "aiosqlite>=0.20.0",
+    "pyyaml>=6.0",
+    "pydantic>=2.0",
+    "tiktoken>=0.7.0",
+    "sentence-transformers>=3.0.0",
+]
+
+[project.optional-dependencies]
+docs = [
+    "sphinx>=7.0",
+    "furo>=2024.0",
+    "myst-parser>=3.0",
+]
+
+[tool.nonebot]
+adapters = [{ name = "OneBot V11", module_name = "nonebot.adapters.onebot.v11" }]
+plugins = ["bot.plugins.group_chat", "bot.plugins.admin", "bot.plugins.scheduled"]
+
+[tool.setuptools.packages.find]
+include = ["bot*"]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
