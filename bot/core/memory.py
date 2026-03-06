@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -93,6 +94,13 @@ class MemoryManager:
         await asyncio.to_thread(self._init_mem0)
 
     def _init_mem0(self):
+        # 确保 Qdrant 直连，不走系统代理（否则易 502）
+        _no = os.environ.get("NO_PROXY", "") or os.environ.get("no_proxy", "")
+        _local = "127.0.0.1,localhost"
+        if _local not in _no:
+            os.environ["NO_PROXY"] = f"{_no},{_local}".lstrip(",")
+            os.environ["no_proxy"] = os.environ["NO_PROXY"]
+
         from mem0 import Memory
 
         ep = self._settings.llm_memory
@@ -135,7 +143,15 @@ class MemoryManager:
                 },
             },
         }
-        self._mem = Memory.from_config(config)
+        try:
+            self._mem = Memory.from_config(config)
+        except Exception as e:
+            logger.warning(
+                "Qdrant 连接失败，长期记忆不可用（请确认 Qdrant 已启动或本机未走代理）: %s",
+                e,
+                exc_info=False,
+            )
+            self._mem = None
 
     async def close(self):
         """关闭元数据库连接。"""
@@ -173,6 +189,7 @@ class MemoryManager:
                     self._mem.add,
                     formatted,
                     user_id=user_id,
+                    run_id=group_id,
                     metadata={"group_id": group_id},
                 )
                 # 记录元数据
@@ -226,8 +243,9 @@ class MemoryManager:
             results = await asyncio.to_thread(
                 self._mem.search,
                 query,
+                run_id=group_id,
                 limit=limit * 2,
-                metadata={"group_id": group_id},
+                filters={"group_id": group_id},
             )
         except Exception:
             logger.exception("记忆检索失败")

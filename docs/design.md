@@ -731,7 +731,15 @@ CREATE INDEX idx_unprocessed ON messages(group_id, processed) WHERE processed = 
 
 ## 10. LLM 输出解析
 
-### 10.1 输出格式
+### 10.1 输出格式与是否必须用 JSON
+
+**为何用 JSON**：支持「一次最多回复 2 人、每人独立内容和好感度 g」，便于解析 userid / message / g 并分别发消息、写好感度。
+
+**是否必须**：不强制。解析失败时会降级为「整段当作一条纯文本回复、userid 为空、g=0」。若可接受「每次只回复一条、好感度统一 +1」，可改为不要求 JSON，只收纯文本并固定 delta。
+
+**为何有时不遵守**：人设强调自然语气，模型会优先像猫娘说话；temperature 较高、小模型或长 system 时，格式约束易被弱化。
+
+**提高遵守率的做法**：通义千问等开启 `response_format={"type": "json_object"}`；prompt 中格式说明简短、放在末尾并写「只输出该 JSON」；必要时略降 temperature。
 
 LLM 返回 JSON 数组：
 

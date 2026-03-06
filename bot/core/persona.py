@@ -47,6 +47,10 @@ def load_persona(path: Path) -> Persona:
         data = yaml.safe_load(f)
 
     master_data = data.get("master", {})
+    if isinstance(master_data, str):
+        master_data = {"name": master_data.strip(), "qq": "", "title": ""}
+    elif not isinstance(master_data, dict):
+        master_data = {}
     master = MasterInfo(
         name=master_data.get("name", ""),
         qq=str(master_data.get("qq", "")),

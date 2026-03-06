@@ -92,6 +92,8 @@ def load_settings() -> Settings:
     Returns:
         填充了 LLM 端点、机器人身份、数据目录等的 Settings 实例。
     """
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env")
     return Settings(
         llm_chat=_load_endpoint("LLM_CHAT", LLMEndpoint(
             api_key="", base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",

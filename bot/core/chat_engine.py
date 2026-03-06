@@ -33,9 +33,23 @@ def _extract_json(raw: str) -> str:
 def _parse_replies(raw: str) -> list[ReplyItem]:
     """解析 LLM 的 JSON 回复为 ReplyItem 列表"""
     try:
-        data = json.loads(_extract_json(raw))
+        extracted = _extract_json(raw)
+        data = json.loads(extracted)
+        # API 的 json_object 可能返回 {"replies": [...]} 或单条 {"userid":"","message":"","g":1}
+        if isinstance(data, dict):
+            for key in ("replies", "messages", "data", "result"):
+                if isinstance(data.get(key), list):
+                    data = data[key]
+                    break
+            else:
+                data = [data]
     except (json.JSONDecodeError, ValueError):
-        logger.warning("JSON 解析失败，降级为纯文本回复: %s", raw[:200])
+        logger.warning(
+            "JSON 解析失败，降级为纯文本回复（首 200 字）: %s", raw[:200]
+        )
+        logger.warning(
+            "LLM 原始输出（完整，用于检查是否遵守 JSON 格式）:\n%s", raw
+        )
         text = raw.strip()
         if not text:
             return []
@@ -83,12 +97,16 @@ class ChatEngine:
             LLM 原始输出，失败时返回空串。
         """
         try:
-            response = await self._client.chat.completions.create(
-                model=self._model,
-                messages=messages,
-                temperature=0.85,
-                max_tokens=500,
-            )
+            kwargs = {
+                "model": self._model,
+                "messages": messages,
+                "temperature": 0.85,
+                "max_tokens": 500,
+            }
+            # 通义千问等兼容 OpenAI 的 API 支持强制 JSON，提高格式遵守率
+            if "dashscope.aliyuncs.com" in str(self._client.base_url):
+                kwargs["response_format"] = {"type": "json_object"}
+            response = await self._client.chat.completions.create(**kwargs)
             content = response.choices[0].message.content or ""
             logger.debug("LLM 原始回复: %s", content[:300])
             return content

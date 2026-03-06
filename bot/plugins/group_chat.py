@@ -141,7 +141,15 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
     # ⑦ 上下文压缩
     prompt_messages = await context_compressor.compress(prompt_messages)
 
-    # ⑧ 调用 LLM
+    # ⑧ 调用 LLM（仅打印记忆与好感度，便于排查）
+    affinity_log = affinity.format_for_prompt(affinities)
+    for line in [
+        f"[请求体] group={group_id}",
+        f"[请求体 记忆] {memories_text}",
+        f"[请求体 好感度] {affinity_log}",
+    ]:
+        logger.info(line)
+        print(line)
     raw_response = await chat_engine.generate(prompt_messages)
     if not raw_response:
         return
