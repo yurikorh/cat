@@ -26,7 +26,7 @@ docs = [
 
 [tool.nonebot]
 adapters = [{ name = "OneBot V11", module_name = "nonebot.adapters.onebot.v11" }]
-plugins = ["bot.plugins.group_chat", "bot.plugins.admin", "bot.plugins.scheduled"]
+plugins = ["bot.plugins.group_chat", "bot.plugins.admin", "bot.plugins.scheduled", "bot.plugins.shortcuts"]
 
 [tool.setuptools.packages.find]
 include = ["bot*"]

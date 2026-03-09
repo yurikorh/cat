@@ -5,14 +5,11 @@
 """
 from __future__ import annotations
 
-import logging
-
+from nonebot import logger
 from openai import AsyncOpenAI
 
 from bot.config import Settings
 from bot.models import ChatMessage
-
-logger = logging.getLogger("cat.smart_trigger")
 
 _JUDGE_PROMPT = """你是猫猫，一只活泼粘人的猫娘。
 你喜欢：猫相关的话题、零食、被夸可爱、有趣的对话、和群友互动。
@@ -22,8 +19,8 @@ _JUDGE_PROMPT = """你是猫猫，一只活泼粘人的猫娘。
 {recent_context}
 
 判断你是否想参与这个话题。只回答 YES 或 NO。
-YES = 话题有趣、跟你相关、或你想插一嘴。
-NO = 跟你完全无关的闲聊。"""
+YES = 话题有趣、跟你相关、或你想插一嘴（有实质内容）。
+NO = 跟你完全无关的闲聊；或随口附和/无实质内容的短句（如 对对/对的对的/嗯嗯/好的好的/收到/1/哈哈哈/666）；或仅表情、标点。"""
 
 
 class SmartTrigger:
@@ -51,7 +48,9 @@ class SmartTrigger:
         for m in recent[-8:]:
             prefix = "[猫猫]" if m.is_bot else f"[{m.nickname}]"
             context_lines.append(f"{prefix}: {m.content}")
-        context_lines.append(f"[{current_msg.nickname}]: {current_msg.content}")
+        context_lines.append(
+            f"[{current_msg.nickname}]: {current_msg.content}"
+        )
 
         prompt = _JUDGE_PROMPT.format(recent_context="\n".join(context_lines))
 
@@ -62,9 +61,13 @@ class SmartTrigger:
                 temperature=0.1,
                 max_tokens=10,
             )
-            answer = (response.choices[0].message.content or "").strip().upper()
+            raw = response.choices[0].message.content or ""
+            answer = raw.strip().upper()
             result = answer.startswith("YES")
-            logger.debug("智能触发判断: %s -> %s", current_msg.content[:50], answer)
+            label = "参与" if result else "不参与"
+            logger.info(
+                f"智能触发判断: {current_msg.content[:50]} -> {answer} ({label})"
+            )
             return result
         except Exception:
             logger.exception("智能触发 LLM 调用失败，默认不触发")

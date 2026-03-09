@@ -7,22 +7,33 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import logging
 import os
 import time
 from pathlib import Path
 
 import aiosqlite
 
+from nonebot import logger
+
 from bot.config import Settings
 from bot.models import ChatMessage, MemoryMeta
-
-logger = logging.getLogger("cat.memory")
 
 _EMOTION_KEYWORDS = {"喜欢", "讨厌", "开心", "难过", "生气", "害怕", "爱", "恨",
                      "高兴", "伤心", "感动", "失望", "感谢", "抱歉", "对不起"}
 _PERSONAL_KEYWORDS = {"名字", "年龄", "生日", "工作", "学校", "专业", "爱好",
                       "住在", "老家", "喜欢吃", "不喜欢", "最喜欢"}
+
+# 明显无价值、不参与记忆提取的短句/模式（去空格后匹配）
+_TRIVIAL_PATTERNS = frozenset({
+    "好", "好的", "好的好的", "嗯", "嗯嗯", "哦", "哦哦", "啊", "哈哈", "哈哈哈",
+    "666", "1", "行", "可以", "收到", "谢谢", "多谢", "在", "在吗", "？", "?",
+    "。。", "。。。", "…", "喵", "喵喵", "笑", "草", "好耶", "好哦", "okk",
+})
+
+# 批次最少字符数，低于则跳过提取（除非含关键词或主人）
+_MIN_CONTENT_LEN = 50
+# 无关键词且非主人时，至少需要这么多字符才考虑提取
+_MIN_CONTENT_LEN_OTHER = 80
 
 _CREATE_META_SQL = """
 CREATE TABLE IF NOT EXISTS memory_meta (
@@ -41,13 +52,76 @@ CREATE INDEX IF NOT EXISTS idx_memory_forget
 
 FORGET_THRESHOLD = 0.6
 
+# 自定义记忆提取 prompt：只提取有长期价值的事实，不提取寒暄与无意义内容
+_CUSTOM_FACT_EXTRACTION_PROMPT = """
+你从群聊/对话中提取「值得长期记住」的事实，只输出 JSON：{"facts": [...]}。
+只提取：用户或猫娘相关的偏好/习惯/重要说法（如喜欢什么、讨厌什么、说过的重要事）、对后续对话有帮助的信息。每条 fact 用一句简短中文。
+不要提取：寒暄、单字/短句回复（如 好/嗯/哈哈哈/666/好的/收到）、无信息量的闲聊、重复内容。没有值得记的就输出 {"facts": []}。
+
+示例：
+Input: 用户：在吗  猫猫：喵～在的哦
+Output: {"facts": []}
+
+Input: 用户：猫猫你喜欢吃啥  猫猫：蛋挞和猫薄荷奶茶！
+Output: {"facts": ["猫猫喜欢吃蛋挞和猫薄荷奶茶"]}
+
+Input: 用户：我还没玩呢
+Output: {"facts": []}
+
+Input: 主人：我最爱吃三文鱼了  猫猫：那下次给你做～
+Output: {"facts": ["主人最爱吃三文鱼"]}
+
+只输出上述格式的 JSON，不要其他文字。
+"""
+
 
 def _content_hash(text: str) -> str:
     return hashlib.md5(text.encode()).hexdigest()[:16]
 
 
+async def _safe_commit(conn: aiosqlite.Connection | None) -> None:
+    """执行 commit；若连接已关闭（如进程关闭时后台任务仍在跑）则只打日志不抛错。"""
+    if not conn:
+        return
+    try:
+        await conn.commit()
+    except ValueError as e:
+        if "no active connection" in str(e).lower():
+            logger.warning("记忆元数据库连接已关闭，跳过 commit（可能正在关机）")
+        else:
+            raise
+
+
 def _has_keywords(text: str, keywords: set[str]) -> bool:
     return any(kw in text for kw in keywords)
+
+
+def _is_trivial_only(text: str) -> bool:
+    """整段内容是否仅为无信息量的短句（可多行）。"""
+    lines = [s.strip() for s in text.splitlines() if s.strip()]
+    if not lines:
+        return True
+    for line in lines:
+        normalized = "".join(c for c in line if c not in " \n\t，。！？、")
+        if len(normalized) > 8:
+            return False
+        if normalized not in _TRIVIAL_PATTERNS and len(normalized) > 2:
+            return False
+    return True
+
+
+def _is_worth_extracting(text: str, involves_master: bool) -> bool:
+    """该批内容是否值得调用 mem0 提取（过滤明显无效/低价值）。"""
+    if not text or not text.strip():
+        return False
+    text = text.strip()
+    if _is_trivial_only(text):
+        return False
+    has_signal = _has_keywords(
+        text, _EMOTION_KEYWORDS | _PERSONAL_KEYWORDS
+    ) or involves_master
+    min_len = _MIN_CONTENT_LEN if has_signal else _MIN_CONTENT_LEN_OTHER
+    return len(text) >= min_len
 
 
 def _compute_importance(text: str, involves_master: bool = False) -> float:
@@ -142,6 +216,8 @@ class MemoryManager:
                     "embedding_model_dims": 512,
                 },
             },
+            "version": "v1.1",
+            "custom_fact_extraction_prompt": _CUSTOM_FACT_EXTRACTION_PROMPT,
         }
         try:
             self._mem = Memory.from_config(config)
@@ -182,21 +258,40 @@ class MemoryManager:
                 f"[{m.nickname}]: {m.content}" for m in user_msgs
             )
             involves_master = user_id == self._master_qq
+            if not _is_worth_extracting(formatted, involves_master):
+                logger.debug(
+                    f"跳过低价值记忆提取: user_id={user_id} len={len(formatted)}"
+                )
+                continue
             importance = _compute_importance(formatted, involves_master)
-
+            timeout = self._settings.memory_extract_timeout_seconds
+            logger.info(
+                f"记忆提取: 开始 user_id={user_id} group={group_id} len={len(formatted)} timeout={timeout}s"
+            )
             try:
-                result = await asyncio.to_thread(
-                    self._mem.add,
-                    formatted,
-                    user_id=user_id,
-                    run_id=group_id,
-                    metadata={"group_id": group_id},
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        self._mem.add,
+                        formatted,
+                        user_id=user_id,
+                        run_id=group_id,
+                        metadata={"group_id": group_id},
+                    ),
+                    timeout=timeout,
                 )
                 # 记录元数据
                 await self._save_meta(result, group_id, user_id,
                                       importance, formatted)
+                logger.info(f"记忆提取: 完成 user_id={user_id} group={group_id}")
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"记忆提取: 超时 user_id={user_id} group={group_id}（{timeout}s），跳过该批。"
+                    "可能原因: LLM_MEMORY 端点慢/卡住、Qdrant 无响应、embedder 慢。"
+                )
             except Exception:
-                logger.exception("记忆提取失败: group=%s user=%s", group_id, user_id)
+                logger.exception(
+                    f"记忆提取失败: group={group_id} user={user_id}"
+                )
 
     async def _save_meta(self, result, group_id: str, user_id: str,
                          importance: float, content: str):
@@ -219,7 +314,7 @@ class MemoryManager:
                    VALUES (?, ?, ?, ?, ?, ?, 0, ?)""",
                 (mem_id, group_id, user_id, importance, now, now, ch),
             )
-        await self._meta_db.commit()
+        await _safe_commit(self._meta_db)
 
     # ── 记忆检索（实时，方案 B） ──
 
@@ -282,7 +377,7 @@ class MemoryManager:
                        WHERE memory_id = ?""",
                     (now, mem_id),
                 )
-        await self._meta_db.commit()
+        await _safe_commit(self._meta_db)
 
     def format_for_prompt(self, memories: list[dict]) -> str:
         """将记忆列表格式化为 Prompt 可用的多行文本。
@@ -334,7 +429,7 @@ class MemoryManager:
                 try:
                     await asyncio.to_thread(self._mem.delete, meta.memory_id)
                 except Exception:
-                    logger.warning("删除记忆失败: %s", meta.memory_id)
+                    logger.warning(f"删除记忆失败: {meta.memory_id}")
                     continue
                 await self._meta_db.execute(
                     "DELETE FROM memory_meta WHERE memory_id = ?",
@@ -343,5 +438,5 @@ class MemoryManager:
                 deleted += 1
 
         if deleted:
-            await self._meta_db.commit()
-            logger.info("遗忘清理完成，删除 %d 条记忆", deleted)
+            await _safe_commit(self._meta_db)
+            logger.info(f"遗忘清理完成，删除 {deleted} 条记忆")

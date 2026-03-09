@@ -36,17 +36,32 @@ class Settings(BaseModel):
     bot: BotIdentity = BotIdentity()
     data_dir: Path = Path("data")
     persona_path: Path = Path("personas/default.yaml")
+    shortcut_commands_path: Path = Path("shortcuts.yaml")
+    """快捷指令配置：触发词与 shortcut 名称的对应关系，见 shortcuts.yaml.example"""
 
     # 规则引擎参数
+    cooldown_enabled: bool = True
+    """是否启用回复冷却；关闭后不限制回复频率。"""
     cooldown_seconds: float = 30
+    """回复冷却时间（秒），此时间内不重复回复（非 @ 时）。"""
+    ignore_enabled: bool = True
+    """是否启用被无视判定；关闭后不会因无人回复而停止回复。"""
+    ignore_seconds: float = 120
+    """被无视判定：机器人发消息后若在此秒数内无人回复，则视为被无视，后续非 @ 不回复。"""
     msg_expire_seconds: float = 300
     max_consecutive_to_same: int = 1
     sliding_window_size: int = 10
+    smart_trigger_timeout_seconds: float = 20
+    """智能判断 LLM 调用超时（秒），超时视为不参与。"""
 
     # 记忆参数
     memory_extract_interval: float = 300
     memory_extract_batch: int = 50
     memory_forget_threshold: float = 0.6
+    memory_search_timeout_seconds: float = 15
+    """记忆检索超时（秒），超时则跳过记忆直接回复。"""
+    memory_extract_timeout_seconds: float = 90
+    """单批记忆提取超时（秒），每批（每个用户）的 mem0.add 超时则跳过该批，便于排查卡住。"""
 
     # 好感度参数
     affinity_initial: float = 50.0
@@ -114,6 +129,23 @@ def load_settings() -> Settings:
         ),
         data_dir=Path(os.getenv("DATA_DIR", "data")),
         persona_path=Path(os.getenv("PERSONA_PATH", "personas/default.yaml")),
+        shortcut_commands_path=Path(
+            os.getenv("SHORTCUT_COMMANDS_PATH", "shortcuts.yaml")
+        ),
+        cooldown_enabled=os.getenv("COOLDOWN_ENABLED", "true").lower() in ("1", "true", "yes"),
+        cooldown_seconds=float(os.getenv("COOLDOWN_SECONDS", "30")),
+        ignore_enabled=os.getenv("IGNORE_ENABLED", "true").lower() in ("1", "true", "yes"),
+        ignore_seconds=float(os.getenv("IGNORE_SECONDS", "120")),
+        msg_expire_seconds=float(os.getenv("MSG_EXPIRE_SECONDS", "300")),
+        smart_trigger_timeout_seconds=float(
+            os.getenv("SMART_TRIGGER_TIMEOUT_SECONDS", "20")
+        ),
+        memory_search_timeout_seconds=float(
+            os.getenv("MEMORY_SEARCH_TIMEOUT_SECONDS", "15")
+        ),
+        memory_extract_timeout_seconds=float(
+            os.getenv("MEMORY_EXTRACT_TIMEOUT_SECONDS", "90")
+        ),
         context_max_tokens=int(os.getenv("CONTEXT_MAX_TOKENS", "0")),
         compression_threshold=float(os.getenv("COMPRESSION_THRESHOLD", "0.82")),
         compression_strategy=os.getenv("COMPRESSION_STRATEGY", "truncate"),

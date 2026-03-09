@@ -5,19 +5,16 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 
-from nonebot import get_driver
+from nonebot import get_driver, logger
 
 from bot.plugins.group_chat import (
+    _do_extract,
     affinity,
     memory,
     settings,
     sliding_window,
-    _last_extract_time,
 )
-
-logger = logging.getLogger("cat.scheduled")
 
 driver = get_driver()
 
@@ -46,19 +43,8 @@ async def _periodic_memory_extract():
 
 
 async def _extract_for_group(group_id: str):
-    """对指定群执行记忆提取并标记已处理。"""
-    import time
-    try:
-        msgs = await sliding_window.get_unprocessed(group_id)
-        if not msgs:
-            return
-        await memory.extract_memories(msgs, group_id)
-        msg_ids = [m.msg_id for m in msgs if m.msg_id is not None]
-        await sliding_window.mark_processed(msg_ids)
-        _last_extract_time[group_id] = time.time()
-        logger.info("定时记忆提取: group=%s, %d 条", group_id, len(msgs))
-    except Exception:
-        logger.exception("定时记忆提取失败: group=%s", group_id)
+    """对指定群执行记忆提取（复用 group_chat._do_extract，同群不会并发）。"""
+    await _do_extract(group_id)
 
 
 async def _daily_maintenance():

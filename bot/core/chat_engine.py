@@ -6,15 +6,13 @@
 from __future__ import annotations
 
 import json
-import logging
 import re
 
+from nonebot import logger
 from openai import AsyncOpenAI
 
 from bot.config import Settings
 from bot.models import ReplyItem
-
-logger = logging.getLogger("cat.chat_engine")
 
 
 def _extract_json(raw: str) -> str:
@@ -58,22 +56,44 @@ def _parse_replies(raw: str) -> list[ReplyItem]:
     if not isinstance(data, list):
         data = [data]
 
+    def _append_parsed(reply_list: list, obj: dict) -> None:
+        msg = str(obj.get("message", "")).strip()
+        if not msg:
+            return
+        userid = str(obj.get("userid", ""))
+        try:
+            delta = int(str(obj.get("g", 0)).replace(" ", ""))
+        except (ValueError, TypeError):
+            delta = 0
+        reply_list.append(ReplyItem(userid=userid, message=msg, affinity_delta=delta))
+
     replies: list[ReplyItem] = []
     for item in data:
-        if not isinstance(item, dict):
+        if isinstance(item, str):
+            msg = item.strip()
+            if not msg:
+                continue
+            # LLM 有时把 JSON 当字符串放进数组：单对象 "{}" 或 数组 "[{}]"
+            if msg.startswith("{"):
+                try:
+                    obj = json.loads(msg)
+                    if isinstance(obj, dict) and obj.get("message"):
+                        _append_parsed(replies, obj)
+                        continue
+                except (json.JSONDecodeError, ValueError, TypeError):
+                    pass
+            if msg.startswith("["):
+                try:
+                    arr = json.loads(msg)
+                    if isinstance(arr, list) and arr and isinstance(arr[0], dict) and arr[0].get("message"):
+                        _append_parsed(replies, arr[0])
+                        continue
+                except (json.JSONDecodeError, ValueError, TypeError, IndexError):
+                    pass
+            replies.append(ReplyItem(userid="", message=msg, affinity_delta=0))
             continue
-        message = str(item.get("message", "")).strip()
-        if not message:
-            continue
-        userid = str(item.get("userid", ""))
-        delta = 0
-        g_raw = item.get("g", "0")
-        try:
-            delta = int(str(g_raw).replace(" ", ""))
-        except (ValueError, TypeError):
-            pass
-        replies.append(ReplyItem(userid=userid, message=message,
-                                 affinity_delta=delta))
+        if isinstance(item, dict):
+            _append_parsed(replies, item)
     return replies
 
 
@@ -101,14 +121,16 @@ class ChatEngine:
                 "model": self._model,
                 "messages": messages,
                 "temperature": 0.85,
-                "max_tokens": 500,
+                "max_tokens": 1024,  # 500
             }
             # 通义千问等兼容 OpenAI 的 API 支持强制 JSON，提高格式遵守率
             if "dashscope.aliyuncs.com" in str(self._client.base_url):
                 kwargs["response_format"] = {"type": "json_object"}
+                # qwen3.5-plus 等深度思考模型：关闭思考可省 token、降延迟，仍用模型基础能力
+                kwargs["extra_body"] = {"enable_thinking": False}
             response = await self._client.chat.completions.create(**kwargs)
             content = response.choices[0].message.content or ""
-            logger.debug("LLM 原始回复: %s", content[:300])
+            logger.debug(f"LLM 原始回复: {content[:300]}")
             return content
         except Exception:
             logger.exception("LLM 调用失败")

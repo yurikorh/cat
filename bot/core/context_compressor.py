@@ -12,14 +12,11 @@
 """
 from __future__ import annotations
 
-import logging
-
+from nonebot import logger
 from openai import AsyncOpenAI
 
 from bot.config import Settings
 from bot.utils.token_counter import estimate_tokens, truncate_messages
-
-logger = logging.getLogger("cat.context_compressor")
 
 _DEFAULT_SUMMARY_PROMPT = (
     "根据以下完整对话历史，生成简洁的摘要，保留关键信息和上下文要点。\n"
@@ -82,8 +79,9 @@ class ContextCompressor:
             return messages
 
         logger.info(
-            "上下文超阈值: %d tokens > %d (%.0f%% of %d), 启动压缩 [策略=%s]",
-            total, limit, self._threshold * 100, self._max_tokens, self._strategy,
+            f"上下文超阈值: {total} tokens > {limit} "
+            f"({self._threshold * 100:.0f}% of {self._max_tokens}), "
+            f"启动压缩 [策略={self._strategy}]"
         )
 
         if self._strategy == "summary":
@@ -97,7 +95,9 @@ class ContextCompressor:
             messages = self._halve(messages)
             total = self._total_tokens(messages)
             halve_rounds += 1
-            logger.warning("对半砍第 %d 轮: %d tokens (limit=%d)", halve_rounds, total, limit)
+            logger.warning(
+                f"对半砍第 {halve_rounds} 轮: {total} tokens (limit={limit})"
+            )
 
         return messages
 
@@ -145,7 +145,9 @@ class ContextCompressor:
         if not summary:
             return self._compress_by_truncation(messages)
 
-        logger.info("摘要压缩完成: %d 条旧消息 → %d chars 摘要", len(older), len(summary))
+        logger.info(
+            f"摘要压缩完成: {len(older)} 条旧消息 → {len(summary)} chars 摘要"
+        )
 
         result = []
         if system:

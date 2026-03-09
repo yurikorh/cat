@@ -5,8 +5,6 @@
 """
 from __future__ import annotations
 
-import logging
-
 from nonebot import on_command
 from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent
 from nonebot.params import CommandArg
@@ -19,8 +17,6 @@ from bot.plugins.group_chat import (
     settings,
     sliding_window,
 )
-
-logger = logging.getLogger("cat.admin")
 
 
 def _is_master(event: GroupMessageEvent) -> bool:

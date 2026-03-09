@@ -28,6 +28,14 @@ class RuleEngine:
         self._reply_state: dict[str, GroupReplyState] = {}
         self._interest_keywords: set[str] = set(persona.interest_keywords)
 
+    def reload(self, settings: Settings, persona: Persona):
+        """热加载：更新配置与人设（供「加载配置」使用）。"""
+        self._settings = settings
+        self._persona = persona
+        self._bot_qq = settings.bot.qq
+        self._master_qq = settings.bot.master_qq
+        self._interest_keywords = set(persona.interest_keywords)
+
     def _get_state(self, group_id: str) -> GroupReplyState:
         """获取或创建该群的回复状态。"""
         if group_id not in self._reply_state:
@@ -45,12 +53,13 @@ class RuleEngine:
         return False
 
     def _is_reply_to_bot(self, event: GroupMessageEvent) -> bool:
-        """检查是否回复了机器人的消息"""
-        raw = event.original_message
-        for seg in raw:
-            if seg.type == "reply":
-                return True
-        return False
+        """检查是否回复了机器人的消息（被回复的那条须为 bot 发送）。"""
+        if event.reply is None:
+            return False
+        reply_sender_id = getattr(event.reply.sender, "user_id", None)
+        if reply_sender_id is None:
+            return False
+        return str(reply_sender_id) == self._bot_qq
 
     def _bot_name_in_message(self, event: GroupMessageEvent) -> bool:
         """检查消息中是否包含机器人名字。"""
@@ -102,7 +111,7 @@ class RuleEngine:
         return PreCheckResult(should_trigger="smart", reason="general", priority=30)
 
     def post_check(self, event: GroupMessageEvent, group_id: str,
-                   pre: PreCheckResult) -> bool:
+                   pre: PreCheckResult) -> tuple[bool, str]:
         """上层控制：冷却、防重复、被无视、消息过期。
 
         Args:
@@ -111,26 +120,26 @@ class RuleEngine:
             pre: 前置检查结果。
 
         Returns:
-            True 表示可回复，False 表示不放行。
+            (True, "") 表示放行；(False, "原因") 表示不放行及原因。
         """
         state = self._get_state(group_id)
         user_id = str(event.user_id)
         is_at = pre.reason == "at_mention"
 
         if self._is_expired(event.time):
-            return False
+            return False, "消息过期"
 
-        if not is_at and state.is_being_ignored():
-            return False
+        if self._settings.ignore_enabled and not is_at and state.is_being_ignored(
+            self._settings.ignore_seconds
+        ):
+            return False, f"被无视({self._settings.ignore_seconds:.0f}s内无回复)"
 
-        if not is_at and state.in_cooldown(self._settings.cooldown_seconds):
-            return False
+        if self._settings.cooldown_enabled and not is_at and state.in_cooldown(
+            self._settings.cooldown_seconds
+        ):
+            return False, "冷却中"
 
-        if state.consecutive_replies_to(user_id) >= self._settings.max_consecutive_to_same:
-            if not is_at:
-                return False
-
-        return True
+        return True, ""
 
     # ── 状态更新 ──
 

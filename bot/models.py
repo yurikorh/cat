@@ -47,11 +47,11 @@ class GroupReplyState:
     last_bot_msg_time: float = 0
     last_bot_msg_got_reply: bool = True
 
-    def is_being_ignored(self) -> bool:
-        """判断机器人是否处于被无视状态（120 秒内无回复）。"""
+    def is_being_ignored(self, seconds: float = 120) -> bool:
+        """判断机器人是否处于被无视状态（seconds 秒内无回复）。"""
         if self.last_bot_msg_got_reply:
             return False
-        return (time.time() - self.last_bot_msg_time) > 120
+        return (time.time() - self.last_bot_msg_time) > seconds
 
     def in_cooldown(self, seconds: float) -> bool:
         """判断是否处于冷却期内（距上次回复不足 seconds 秒）。"""
